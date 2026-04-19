@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Food Runner - Perfect Restart</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #020617; font-family: 'Helvetica Neue', Arial, sans-serif; touch-action: none; }
+        #game-container { position: relative; width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        canvas { box-shadow: 0 0 60px rgba(0,0,0,0.8); border-radius: 16px; max-width: 95%; max-height: 75vh; background: #000; }
+        
+        .ui-panel { position: absolute; top: 15px; padding: 12px 40px; background: rgba(255,255,255,0.95); border-radius: 20px; display: flex; gap: 30px; box-shadow: 0 8px 15px rgba(0,0,0,0.2); z-index: 10; border: 2px solid #fbbf24; }
+        
+        #stage-hint {
+            position: absolute; top: 110px;
+            font-size: 1.1rem; font-weight: bold; color: #fff;
+            background: rgba(0, 0, 0, 0.9); padding: 15px 40px; border-radius: 50px;
+            opacity: 0; transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 20; pointer-events: none; transform: translateY(-20px);
+            border: 3px solid #fbbf24;
+            max-width: 80%; text-align: center;
+        }
+        #stage-hint.show { opacity: 1; transform: translateY(0); }
+
+        #game-over { 
+            position: absolute; inset: 0; 
+            display: none; flex-direction: column; align-items: center; justify-content: center; 
+            z-index: 50; text-align: center; color: white;
+            background: rgba(0,0,0,0.7);
+        }
+
+        .result-card {
+            padding: 50px 70px; border-radius: 40px; position: relative; overflow: hidden;
+            box-shadow: 0 0 100px rgba(0, 0, 0, 0.8); transform: scale(1);
+            z-index: 60;
+        }
+
+        .theme-trash { background: linear-gradient(180deg, #1e293b 0%, #020617 100%); border: 4px solid #475569; }
+        .theme-gold { 
+            background: radial-gradient(circle, #fbbf24 0%, #b45309 100%); 
+            border: 8px solid #fef08a;
+        }
+
+        .rank-title { font-size: 5.5rem; font-weight: 900; margin-bottom: 0; line-height: 1; letter-spacing: -2px; }
+        .gold-glow { text-shadow: 0 0 30px #fff, 0 0 50px #fbbf24; animation: pulseGlow 1.5s infinite; }
+        @keyframes pulseGlow { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+        #stage-banner { 
+            position: absolute; top: 40%; font-size: 5rem; font-weight: 900; color: #fff; 
+            text-shadow: 0 0 40px rgba(0,0,0,0.5); pointer-events: none;
+            opacity: 0; transition: all 0.7s cubic-bezier(0.68, -0.55, 0.265, 1.55); z-index: 30; transform: scale(0.2) rotate(-10deg);
+        }
+        #stage-banner.show { opacity: 1; transform: scale(1) rotate(0deg); }
+
+        #countdown {
+            position: absolute; font-size: 8rem; font-weight: 900; color: #fff;
+            text-shadow: 0 0 30px rgba(0,0,0,0.5); z-index: 40; pointer-events: none;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="stage-banner">STAGE CLEAR!</div>
+    <div id="stage-hint">ヒント</div>
+    <div id="countdown">3</div>
+
+    <div class="ui-panel text-center">
+        <div><div class="text-xs text-gray-500 font-bold uppercase">Stage</div><div id="stage-val" class="text-2xl font-black text-amber-500">1</div></div>
+        <div class="w-px h-10 bg-gray-200"></div>
+        <div><div class="text-xs text-gray-500 font-bold uppercase">Weight</div><div id="w-val" class="text-2xl font-black text-slate-800">60.0 kg</div></div>
+        <div class="w-px h-10 bg-gray-200"></div>
+        <div><div class="text-xs text-gray-500 font-bold uppercase">Distance</div><div id="s-val" class="text-2xl font-black text-slate-800">0 m</div></div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="game-over">
+        <div id="result-card" class="result-card">
+            <div id="rank-name" class="rank-title">IRON</div>
+            <div class="h-1.5 w-40 bg-white/40 mx-auto my-6 rounded-full"></div>
+            <h2 class="text-xl font-bold tracking-[0.3em] text-white/90 uppercase mb-2">Final Distance</h2>
+            <p id="final-score" class="text-7xl font-black mb-6">0 m</p>
+            <p id="reason" class="text-amber-200 font-bold mb-4 text-xl"></p>
+            <p id="insult-msg" class="text-2xl font-bold mb-4 px-6 leading-relaxed"></p>
+            
+            <div class="mt-8 py-3 px-6 bg-white/10 rounded-2xl border border-white/20 inline-block">
+                <p class="text-white text-lg font-black animate-pulse uppercase tracking-widest">
+                    Press <span class="text-amber-400">ENTER</span> to Retry
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const wDisp = document.getElementById('w-val'), sDisp = document.getElementById('s-val'), stDisp = document.getElementById('stage-val');
+    const over = document.getElementById('game-over'), reasonDisp = document.getElementById('reason');
+    const insultMsg = document.getElementById('insult-msg'), rankName = document.getElementById('rank-name'), finalScoreDisp = document.getElementById('final-score');
+    const banner = document.getElementById('stage-banner'), hintBanner = document.getElementById('stage-hint'), resultCard = document.getElementById('result-card');
+    const countDisp = document.getElementById('countdown');
+
+    canvas.width = 800; canvas.height = 400;
+    const GROUND = 320, MIN_W = 40, MAX_W = 150, GRAVITY = 0.85;
+
+    const stages = [
+        { id: 1, name: "穏やかな公園", limit: 500, bg: ["#0ea5e9", "#22c55e"], hint: "💡 ステージ1: ヘルシーな🍌バナナなどを取って体力をつけよう！\nスペースキーでジャンプ！", foods: [{ e: '🥗', c: -3 }, { e: '🍎', c: -1 }, { e: '💧', c: -0.5 }, { e: '🍌', c: 2 }] },
+        { id: 2, name: "真夜中の繁華街", limit: 1000, bg: ["#1e1b4b", "#4338ca"], hint: "💡 ステージ2: 誘惑の街。太りやすい食べ物をうまく避けよう！", foods: [{ e: '🍔', c: 8 }, { e: '🍕', c: 12 }, { e: '🍗', c: 10 }, { e: '🍟', c: 6 }, { e: '🍺', c: 4 }] },
+        { id: 3, name: "黄金の宇宙空間", limit: Infinity, bg: ["#78350f", "#fbbf24"], hint: "💡 ステージ3: 究極のバランス。食べるものを選び、長く走り続けろ！", foods: [{ e: '🍰', c: 15 }, { e: '🍩', c: 10 }, { e: '🍦', c: 8 }, { e: '🍫', c: 12 }, { e: '☄️', c: -5 }] }
+    ];
+
+    let p, items, particles, score, active, frame, currentStageIdx, resultItems, isPaused;
+    let animationId = null;
+
+    function resetGame() {
+        if (animationId) cancelAnimationFrame(animationId);
+        p = { x: 100, y: GROUND, vy: 0, w: 60, j: 0 };
+        items = [];
+        particles = [];
+        resultItems = [];
+        score = 0;
+        frame = 0;
+        currentStageIdx = 0;
+        active = true;
+        isPaused = false;
+        
+        over.style.display = 'none';
+        rankName.classList.remove("gold-glow");
+        finalScoreDisp.classList.remove("gold-glow");
+        
+        showStageInfo(0, true);
+        loop();
+    }
+
+    function jump() {
+        if (!active || isPaused) return;
+        if (p.j < 2) {
+            const weightPenalty = (p.w - 60) / 12; 
+            p.vy = (p.j === 0 ? -16 : -13) + weightPenalty;
+            p.j++;
+        }
+    }
+
+    window.addEventListener('keydown', e => { 
+        if (e.code === 'Space') { e.preventDefault(); jump(); }
+        if (e.code === 'Enter' && !active) { e.preventDefault(); resetGame(); }
+    });
+
+    canvas.addEventListener('mousedown', e => { e.preventDefault(); jump(); });
+    canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); });
+
+    async function showStageInfo(idx, isFirst = false) {
+        isPaused = true;
+        banner.innerText = stages[idx].name;
+        hintBanner.innerText = stages[idx].hint;
+        banner.classList.add('show');
+        hintBanner.classList.add('show');
+
+        await new Promise(r => setTimeout(r, 3000));
+        
+        banner.classList.remove('show');
+        hintBanner.classList.remove('show');
+
+        if (isFirst) {
+            countDisp.style.display = 'block';
+            for (let i = 3; i > 0; i--) {
+                countDisp.innerText = i;
+                await new Promise(r => setTimeout(r, 600));
+            }
+            countDisp.innerText = "GO!";
+            setTimeout(() => { countDisp.style.display = 'none'; }, 400);
+        }
+        isPaused = false;
+    }
+
+    function createParticles(x, y, color, count = 10, vy = 0) {
+        for(let i=0; i<count; i++) {
+            particles.push({
+                x, y, vx: (Math.random() - 0.5) * 8, vy: vy || (Math.random() - 0.5) * 8,
+                life: 1.0, color: color, size: Math.random() * 5 + 2
+            });
+        }
+    }
+
+    function loop() {
+        if (!active) {
+            drawResultAnimation();
+            return;
+        }
+
+        const curStage = stages[currentStageIdx];
+        const grad = ctx.createLinearGradient(0, 0, 0, 400);
+        if (currentStageIdx === 2) {
+            grad.addColorStop(0, '#451a03'); grad.addColorStop(0.5, '#92400e'); grad.addColorStop(1, '#f59e0b');
+        } else {
+            grad.addColorStop(0, curStage.bg[0]); grad.addColorStop(0.7, curStage.bg[1]);
+        }
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 800, 400);
+
+        let baseSpeed = 7.0 + (score / 550); 
+        ctx.fillStyle = currentStageIdx === 2 ? '#78350f' : '#1e293b';
+        ctx.fillRect(0, GROUND, 800, 80);
+        ctx.strokeStyle = 'rgba(251,191,36,0.3)';
+        ctx.lineWidth = 2;
+        const groundOffset = isPaused ? 0 : (frame * baseSpeed) % 50;
+        for(let i=0; i<900; i+=50) {
+            const xOff = i - groundOffset;
+            ctx.beginPath(); ctx.moveTo(xOff, GROUND); ctx.lineTo(xOff - 30, 400); ctx.stroke();
+        }
+
+        if (!isPaused) {
+            frame++;
+            score += 0.35;
+            if (score >= curStage.limit && currentStageIdx < stages.length - 1) {
+                currentStageIdx++;
+                showStageInfo(currentStageIdx);
+            }
+            if (currentStageIdx === 2 && frame % 10 === 0) createParticles(Math.random() * 800, -10, '#fbbf24', 1, 2);
+            p.y += p.vy;
+            if (p.y < GROUND) p.vy += GRAVITY;
+            else { p.y = GROUND; p.vy = 0; p.j = 0; }
+            if (frame % 60 === 0) p.w = Math.max(MIN_W - 5, p.w - 0.25);
+            const spawnRate = currentStageIdx === 2 ? 22 : 28;
+            if (frame % spawnRate === 0) {
+                const f = curStage.foods[Math.floor(Math.random() * curStage.foods.length)];
+                items.push({ x: 850, y: GROUND - 30 - Math.random() * 200, f, s: baseSpeed });
+            }
+        }
+
+        particles.forEach((pa, i) => {
+            if (!isPaused) { pa.x += pa.vx; pa.y += pa.vy; pa.life -= 0.015; }
+            ctx.globalAlpha = Math.max(0, pa.life);
+            ctx.fillStyle = pa.color;
+            ctx.beginPath(); ctx.arc(pa.x, pa.y, pa.size, 0, Math.PI*2); ctx.fill();
+            if(pa.life <= 0) particles.splice(i, 1);
+        });
+        ctx.globalAlpha = 1.0;
+
+        items.forEach((it, i) => {
+            if (!isPaused) it.x -= it.s;
+            ctx.font = '36px Arial'; ctx.textAlign = 'center';
+            ctx.fillText(it.f.e, it.x, it.y);
+            if (!isPaused) {
+                const hitW = 38 + (p.w - 60) / 4;
+                if (Math.hypot(p.x - it.x, (p.y-45) - it.y) < hitW) {
+                    createParticles(it.x, it.y, it.f.c > 0 ? '#ef4444' : '#60a5fa');
+                    p.w += it.f.c; items.splice(i, 1);
+                }
+            }
+        });
+        items = items.filter(it => it.x > -100);
+
+        const wScale = p.w / 60; 
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        const legSwing = !isPaused && p.y === GROUND ? Math.sin(frame * 0.3) * 20 : 0;
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 8 * Math.sqrt(wScale);
+        ctx.beginPath(); ctx.moveTo(-10 * wScale, -10); ctx.lineTo(-10 * wScale + legSwing, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(10 * wScale, -10); ctx.lineTo(10 * wScale - legSwing, 0); ctx.stroke();
+        ctx.fillStyle = currentStageIdx === 2 ? '#fbbf24' : '#3b82f6';
+        const bodyW = 36 * wScale, bodyH = 55;
+        ctx.beginPath(); ctx.roundRect(-bodyW / 2, -bodyH - 10, bodyW, bodyH, 15); ctx.fill();
+        const headY = -82;
+        ctx.fillStyle = '#ffdbac';
+        ctx.beginPath(); ctx.ellipse(0, headY, 18 * Math.sqrt(wScale), 20, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = '#1e293b';
+        ctx.beginPath(); ctx.arc(0, headY - 10, 20 * Math.sqrt(wScale), Math.PI, 0); ctx.fill();
+        ctx.fillStyle = 'black';
+        ctx.beginPath(); ctx.arc(-8 * wScale, headY, 3, 0, 7); ctx.arc(8 * wScale, headY, 3, 0, 7); ctx.fill();
+        ctx.strokeStyle = 'black'; ctx.lineWidth = 2.5; ctx.beginPath();
+        if (p.w > 110) ctx.arc(0, headY + 8, 5, 0, Math.PI * 2);
+        else ctx.arc(0, headY + 6, 8, 0.4, Math.PI - 0.4);
+        ctx.stroke();
+        ctx.restore();
+
+        wDisp.innerText = p.w.toFixed(1) + ' kg';
+        sDisp.innerText = Math.floor(score).toLocaleString() + ' m';
+        stDisp.innerText = currentStageIdx + 1;
+
+        if (p.w < MIN_W) end("痩せすぎて消滅しました...");
+        if (p.w > MAX_W) end("重さに耐えきれず地割れが起きました...");
+        
+        animationId = requestAnimationFrame(loop);
+    }
+
+    function drawResultAnimation() {
+        if (active) return;
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillRect(0,0,800,400);
+        resultItems.forEach((it, i) => {
+            it.y += it.vy; it.rotation += it.vr;
+            ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(it.rotation);
+            ctx.font = it.size + 'px Arial'; ctx.textAlign = 'center';
+            ctx.fillText(it.emoji, 0, 0); ctx.restore();
+            if (it.y > 500) resultItems.splice(i, 1);
+        });
+        if (score > 1000 && Math.random() < 0.1) {
+            const treasures = ['🎁', '💎', '💰', '👑', '✨', '🪙'];
+            resultItems.push({ x: Math.random() * 800, y: -50, vy: 2 + Math.random() * 4, vr: (Math.random() - 0.5) * 0.1, rotation: Math.random() * Math.PI, emoji: treasures[Math.floor(Math.random() * treasures.length)], size: 20 + Math.random() * 30 });
+        }
+        animationId = requestAnimationFrame(drawResultAnimation);
+    }
+
+    function end(txt) {
+        active = false;
+        const fs = Math.floor(score);
+        reasonDisp.innerText = txt;
+        finalScoreDisp.innerText = fs.toLocaleString() + " m";
+        let rank = "", msg = "", theme = "";
+        if (fs < 500) { rank = "TRASH"; msg = "「君、歩いてるの？それとも止まってるの？😅」"; theme = "theme-trash"; }
+        else if (fs < 1000) { rank = "CITIZEN"; msg = "「平凡。あまりにも平凡。」"; theme = "theme-trash"; }
+        else if (fs < 1500) { rank = "MASTER"; msg = "「なかなかの根性だ。見直したぞ。」"; theme = "theme-gold"; }
+        else { rank = "GOD"; msg = "「神。もはや言葉は不要。」"; theme = "theme-gold"; }
+        rankName.innerText = rank; insultMsg.innerText = msg;
+        resultCard.className = "result-card " + theme;
+        if (theme === "theme-gold") { rankName.classList.add("gold-glow"); finalScoreDisp.classList.add("gold-glow"); }
+        over.style.display = 'flex';
+    }
+
+    window.onload = resetGame;
+</script>
+</body>
+</html>
