@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Food Runner - Perfect Restart</title>
+    <title>Food Runner - Stage Music Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #020617; font-family: 'Helvetica Neue', Arial, sans-serif; touch-action: none; }
@@ -96,6 +96,119 @@
 </div>
 
 <script>
+    // --- Audio Engine ---
+    const AudioEngine = {
+        ctx: null,
+        bgmGain: null,
+        enabled: false,
+        nextNoteTime: 0,
+        noteIndex: 0,
+        
+        init() {
+            if (this.enabled) return;
+            try {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.bgmGain = this.ctx.createGain();
+                this.bgmGain.gain.value = 0.05; // 全体の音量
+                this.bgmGain.connect(this.ctx.destination);
+                this.enabled = true;
+                this.nextNoteTime = this.ctx.currentTime;
+            } catch(e) { console.error("Audio init failed", e); }
+        },
+
+        playJump() {
+            if (!this.enabled) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(260, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.15);
+        },
+
+        playCollect(isGood) {
+            if (!this.enabled) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            if (isGood) { // 体重減（良いもの）
+                osc.frequency.setValueAtTime(880, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1760, this.ctx.currentTime + 0.1);
+            } else { // 体重増
+                osc.frequency.setValueAtTime(440, this.ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(110, this.ctx.currentTime + 0.15);
+            }
+            gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.15);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.15);
+        },
+
+        playDeath() {
+            if (!this.enabled) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(110, this.ctx.currentTime);
+            osc.frequency.linearRampToValueAtTime(30, this.ctx.currentTime + 1);
+            gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 1);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 1);
+        },
+
+        // BGM Scheduler: 定期的に音符を予約
+        tick(stageId) {
+            if (!this.enabled || !active || isPaused) return;
+            
+            while (this.nextNoteTime < this.ctx.currentTime + 0.1) {
+                this.scheduleNote(stageId, this.nextNoteTime);
+                // ステージごとにテンポを変える
+                const tempo = stageId === 2 ? 0.18 : 0.22;
+                this.nextNoteTime += tempo;
+                this.noteIndex++;
+            }
+        },
+
+        scheduleNote(stageId, time) {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            
+            let freq = 0;
+            // ステージごとの音階（ペンタトニックスケールなど）
+            if (stageId === 1) { // 公園: メジャーペンタトニック（明るい）
+                const scale = [261.63, 293.66, 329.63, 392.00, 440.00]; // C4, D4, E4, G4, A4
+                const pattern = [0, 2, 4, 3, 0, 2, 4, 7]; 
+                const idx = pattern[this.noteIndex % pattern.length];
+                freq = idx < 5 ? scale[idx] : scale[idx-5] * 2;
+                osc.type = 'triangle';
+            } else if (stageId === 2) { // 都会: マイナー/ブルース（少しダーク）
+                const scale = [110, 130.81, 146.83, 164.81, 196.00]; 
+                freq = scale[this.noteIndex % scale.length];
+                if (this.noteIndex % 4 === 0) freq *= 2; 
+                osc.type = 'sawtooth';
+            } else { // 宇宙: アンビエント（不思議）
+                const scale = [523.25, 659.25, 783.99, 987.77, 1046.50];
+                freq = scale[Math.floor(Math.random() * scale.length)];
+                osc.type = 'sine';
+            }
+
+            osc.frequency.setValueAtTime(freq, time);
+            // 音量包絡線（プチプチ音を防ぐ）
+            g.gain.setValueAtTime(stageId === 3 ? 0.02 : 0.04, time);
+            g.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
+            
+            osc.connect(g);
+            g.connect(this.bgmGain);
+            osc.start(time);
+            osc.stop(time + 0.22);
+        }
+    };
+
+    // --- Game Logic ---
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const wDisp = document.getElementById('w-val'), sDisp = document.getElementById('s-val'), stDisp = document.getElementById('stage-val');
@@ -108,9 +221,9 @@
     const GROUND = 320, MIN_W = 40, MAX_W = 150, GRAVITY = 0.85;
 
     const stages = [
-        { id: 1, name: "穏やかな公園", limit: 500, bg: ["#0ea5e9", "#22c55e"], hint: "💡 ステージ1: ヘルシーな🍌バナナなどを取って体力をつけよう！\nスペースキーでジャンプ！", foods: [{ e: '🥗', c: -3 }, { e: '🍎', c: -1 }, { e: '💧', c: -0.5 }, { e: '🍌', c: 2 }] },
-        { id: 2, name: "真夜中の繁華街", limit: 1000, bg: ["#1e1b4b", "#4338ca"], hint: "💡 ステージ2: 誘惑の街。太りやすい食べ物をうまく避けよう！", foods: [{ e: '🍔', c: 8 }, { e: '🍕', c: 12 }, { e: '🍗', c: 10 }, { e: '🍟', c: 6 }, { e: '🍺', c: 4 }] },
-        { id: 3, name: "黄金の宇宙空間", limit: Infinity, bg: ["#78350f", "#fbbf24"], hint: "💡 ステージ3: 究極のバランス。食べるものを選び、長く走り続けろ！", foods: [{ e: '🍰', c: 15 }, { e: '🍩', c: 10 }, { e: '🍦', c: 8 }, { e: '🍫', c: 12 }, { e: '☄️', c: -5 }] }
+        { id: 1, name: "穏やかな公園", limit: 500, bg: ["#0ea5e9", "#22c55e"], hint: "💡 ステージ1: ヘルシーな🥗などを取って体力をつけよう！\nスペースキーでジャンプ！", foods: [{ e: '🥗', c: -3 }, { e: '🍎', c: -1 }, { e: '💧', c: -0.5 }, { e: '🍌', c: 2 }] },
+        { id: 2, name: "真夜中の繁華街", limit: 1200, bg: ["#1e1b4b", "#4338ca"], hint: "💡 ステージ2: 誘惑の街。ハイカロリーな誘惑を避けろ！", foods: [{ e: '🍔', c: 8 }, { e: '🍕', c: 12 }, { e: '🍗', c: 10 }, { e: '🍟', c: 6 }, { e: '🍺', c: 4 }] },
+        { id: 3, name: "黄金の宇宙空間", limit: Infinity, bg: ["#78350f", "#fbbf24"], hint: "💡 ステージ3: 無重力サバイバル。伝説のランナーを目指せ！", foods: [{ e: '🍰', c: 15 }, { e: '🍩', c: 10 }, { e: '🍦', c: 8 }, { e: '🍫', c: 12 }, { e: '☄️', c: -5 }] }
     ];
 
     let p, items, particles, score, active, frame, currentStageIdx, resultItems, isPaused;
@@ -137,17 +250,23 @@
     }
 
     function jump() {
+        AudioEngine.init(); // ユーザー操作でオーディオをアクティブ化
         if (!active || isPaused) return;
         if (p.j < 2) {
             const weightPenalty = (p.w - 60) / 12; 
             p.vy = (p.j === 0 ? -16 : -13) + weightPenalty;
             p.j++;
+            AudioEngine.playJump();
         }
     }
 
     window.addEventListener('keydown', e => { 
         if (e.code === 'Space') { e.preventDefault(); jump(); }
-        if (e.code === 'Enter' && !active) { e.preventDefault(); resetGame(); }
+        if (e.code === 'Enter') { 
+            e.preventDefault(); 
+            if (!active) resetGame();
+            else AudioEngine.init(); 
+        }
     });
 
     canvas.addEventListener('mousedown', e => { e.preventDefault(); jump(); });
@@ -192,6 +311,9 @@
             return;
         }
 
+        // BGMの音符を管理
+        AudioEngine.tick(currentStageIdx + 1);
+
         const curStage = stages[currentStageIdx];
         const grad = ctx.createLinearGradient(0, 0, 0, 400);
         if (currentStageIdx === 2) {
@@ -202,12 +324,12 @@
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, 800, 400);
 
-        let baseSpeed = 7.0 + (score / 550); 
+        let baseSpeed = 7.0 + (score / 600); 
         ctx.fillStyle = currentStageIdx === 2 ? '#78350f' : '#1e293b';
         ctx.fillRect(0, GROUND, 800, 80);
-        ctx.strokeStyle = 'rgba(251,191,36,0.3)';
-        ctx.lineWidth = 2;
+        
         const groundOffset = isPaused ? 0 : (frame * baseSpeed) % 50;
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
         for(let i=0; i<900; i+=50) {
             const xOff = i - groundOffset;
             ctx.beginPath(); ctx.moveTo(xOff, GROUND); ctx.lineTo(xOff - 30, 400); ctx.stroke();
@@ -216,6 +338,7 @@
         if (!isPaused) {
             frame++;
             score += 0.35;
+
             if (score >= curStage.limit && currentStageIdx < stages.length - 1) {
                 currentStageIdx++;
                 showStageInfo(currentStageIdx);
@@ -249,6 +372,7 @@
                 const hitW = 38 + (p.w - 60) / 4;
                 if (Math.hypot(p.x - it.x, (p.y-45) - it.y) < hitW) {
                     createParticles(it.x, it.y, it.f.c > 0 ? '#ef4444' : '#60a5fa');
+                    AudioEngine.playCollect(it.f.c < 0);
                     p.w += it.f.c; items.splice(i, 1);
                 }
             }
@@ -308,13 +432,14 @@
 
     function end(txt) {
         active = false;
+        AudioEngine.playDeath();
         const fs = Math.floor(score);
         reasonDisp.innerText = txt;
         finalScoreDisp.innerText = fs.toLocaleString() + " m";
         let rank = "", msg = "", theme = "";
         if (fs < 500) { rank = "TRASH"; msg = "「君、歩いてるの？それとも止まってるの？😅」"; theme = "theme-trash"; }
-        else if (fs < 1000) { rank = "CITIZEN"; msg = "「平凡。あまりにも平凡。」"; theme = "theme-trash"; }
-        else if (fs < 1500) { rank = "MASTER"; msg = "「なかなかの根性だ。見直したぞ。」"; theme = "theme-gold"; }
+        else if (fs < 1200) { rank = "CITIZEN"; msg = "「平凡。あまりにも平凡。」"; theme = "theme-trash"; }
+        else if (fs < 2000) { rank = "MASTER"; msg = "「なかなかの根性だ。見直したぞ。」"; theme = "theme-gold"; }
         else { rank = "GOD"; msg = "「神。もはや言葉は不要。」"; theme = "theme-gold"; }
         rankName.innerText = rank; insultMsg.innerText = msg;
         resultCard.className = "result-card " + theme;
